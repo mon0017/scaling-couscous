@@ -21,6 +21,9 @@ export async function saveOrganization(u:any,b:any){
  for(const r of org.roles)statements.push(d.prepare('UPDATE org_roles SET parent_id=? WHERE id=?').bind(r.parent_id,r.id));
  statements.push(d.prepare('DELETE FROM member_roles'),d.prepare('DELETE FROM approval_routes'));
  for(const a of org.assignments)statements.push(d.prepare('INSERT INTO member_roles (member_id,role_id) VALUES (?,?)').bind(a.member_id,a.role_id));
+ // Recheck inside the transaction: an application may arrive after the earlier
+ // validation read but before this configuration batch acquires the database.
+ statements.push(d.prepare("INSERT INTO organization (id,name,revision) SELECT 1,'missing reviewer',0 WHERE EXISTS (SELECT 1 FROM loan_approvals a JOIN loans l ON l.id=a.loan_id WHERE a.status='pending' AND l.status='pending' AND NOT EXISTS (SELECT 1 FROM member_roles mr WHERE mr.role_id=a.role_id AND mr.member_id<>l.member_id))"));
  for(const t of org.loanTypes){statements.push(d.prepare('INSERT INTO loan_types (id,name,active) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,active=excluded.active').bind(t.id,t.name,t.active));t.steps.forEach((r,i)=>statements.push(d.prepare('INSERT INTO approval_routes (type_id,position,role_id) VALUES (?,?,?)').bind(t.id,i+1,r)))}
  statements.push(d.prepare('UPDATE organization SET name=?,revision=revision+1 WHERE id=1').bind(org.name));await d.batch(statements);return json({message:'Organization and approval routes saved. Existing applications keep their original steps.'});
 }
