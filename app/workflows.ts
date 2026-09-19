@@ -1,6 +1,19 @@
 import {db,json,string,notice} from './server';
 import {quote} from './shared';
 import {validateOrganization,canReviewLoan,type Organization} from './organization';
+import {memberFields} from './member-enrollment';
+
+export async function saveMember(u:any,b:any){
+ if(u.role!=='admin')return json({error:'Administrator access required.'},403);
+ const d=db(),fields=memberFields(b),existing=b.memberId?await d.prepare('SELECT * FROM members WHERE id=?').bind(string(b.memberId)).first<any>():null;
+ if(b.memberId&&!existing)return json({error:'Member not found.'},404);
+ if(existing?.auth_id&&existing.email.trim().toLowerCase()!==fields.email)throw Error('The email is locked after first sign-in. This protects the member’s account.');
+ const duplicate=await d.prepare('SELECT id FROM members WHERE lower(trim(email))=? AND id<>?').bind(fields.email,existing?.id||'').first();
+ if(duplicate)return json({error:'This email is already enrolled. Find the member in the directory instead.'},409);
+ if(existing){const result=await d.prepare('UPDATE members SET name=?,email=?,phone=?,department=? WHERE id=? AND (auth_id IS NULL OR lower(trim(email))=?)').bind(fields.name,fields.email,fields.phone,fields.department,existing.id,fields.email).run();if(!result.meta.changes)return json({error:'This member has signed in. Refresh before editing their details.'},409)}
+ else await d.prepare('INSERT INTO members (id,name,email,role,phone,department) VALUES (?,?,?,?,?,?)').bind('member-'+crypto.randomUUID(),fields.name,fields.email,'member',fields.phone,fields.department).run();
+ return json({message:existing?'Member details updated.':'Member enrolled. You can now assign roles. No invitation email has been sent.'});
+}
 
 export async function readOrganization():Promise<Organization>{
  const d=db();const [org,roles,assignments,types,routes]=await Promise.all([
@@ -15,7 +28,7 @@ export async function saveOrganization(u:any,b:any){
  if(org.revision!==old.revision)return json({error:'Organization changed. Refresh and reapply your edits.'},409);
  if(old.loanTypes.some(t=>!org.loanTypes.some(x=>x.id===t.id)))throw Error('Disable existing loan types instead of removing them.');
  const pending=(await d.prepare("SELECT a.role_id,l.member_id FROM loan_approvals a JOIN loans l ON l.id=a.loan_id WHERE a.status='pending' AND l.status='pending'").all<any>()).results;
- if(pending.some(p=>!org.assignments.some(a=>a.role_id===p.role_id&&a.member_id!==p.member_id)))throw Error('Keep an eligible reviewer assigned to every role needed by a pending application.');
+ if(pending.some(p=>old.assignments.some(a=>a.role_id===p.role_id&&a.member_id!==p.member_id)&&!org.assignments.some(a=>a.role_id===p.role_id&&a.member_id!==p.member_id)))throw Error('Keep an eligible reviewer assigned to every role needed by a pending application.');
  const statements=[revisionGuard(org.revision)];
  for(const r of org.roles)statements.push(d.prepare('INSERT INTO org_roles (id,name) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name').bind(r.id,r.name));
  for(const r of org.roles)statements.push(d.prepare('UPDATE org_roles SET parent_id=? WHERE id=?').bind(r.parent_id,r.id));
@@ -23,7 +36,7 @@ export async function saveOrganization(u:any,b:any){
  for(const a of org.assignments)statements.push(d.prepare('INSERT INTO member_roles (member_id,role_id) VALUES (?,?)').bind(a.member_id,a.role_id));
  // Recheck inside the transaction: an application may arrive after the earlier
  // validation read but before this configuration batch acquires the database.
- statements.push(d.prepare("INSERT INTO organization (id,name,revision) SELECT 1,'missing reviewer',0 WHERE EXISTS (SELECT 1 FROM loan_approvals a JOIN loans l ON l.id=a.loan_id WHERE a.status='pending' AND l.status='pending' AND NOT EXISTS (SELECT 1 FROM member_roles mr WHERE mr.role_id=a.role_id AND mr.member_id<>l.member_id))"));
+ statements.push(d.prepare("INSERT INTO organization (id,name,revision) SELECT 1,'missing reviewer',0 WHERE EXISTS (SELECT 1 FROM loan_approvals a JOIN loans l ON l.id=a.loan_id WHERE a.status='pending' AND l.status='pending' AND EXISTS (SELECT 1 FROM json_each(?) previous WHERE json_extract(previous.value,'$.role_id')=a.role_id AND json_extract(previous.value,'$.member_id')<>l.member_id) AND NOT EXISTS (SELECT 1 FROM member_roles mr WHERE mr.role_id=a.role_id AND mr.member_id<>l.member_id))").bind(JSON.stringify(old.assignments)));
  for(const t of org.loanTypes){statements.push(d.prepare('INSERT INTO loan_types (id,name,active) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,active=excluded.active').bind(t.id,t.name,t.active));t.steps.forEach((r,i)=>statements.push(d.prepare('INSERT INTO approval_routes (type_id,position,role_id) VALUES (?,?,?)').bind(t.id,i+1,r)))}
  statements.push(d.prepare('UPDATE organization SET name=?,revision=revision+1 WHERE id=1').bind(org.name));await d.batch(statements);return json({message:'Organization and approval routes saved. Existing applications keep their original steps.'});
 }
