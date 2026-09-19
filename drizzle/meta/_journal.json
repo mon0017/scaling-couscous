@@ -15,6 +15,13 @@
       "when": 1789703805321,
       "tag": "0001_organization_approvals",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1789789026959,
+      "tag": "0002_member_enrollment",
+      "breakpoints": true
     }
   ]
 }

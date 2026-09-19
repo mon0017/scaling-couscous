@@ -1,8 +1,9 @@
 // Intentionally empty by default.
 // Add Drizzle tables here when the site actually needs a database.
 // See examples/d1/db/schema.ts for an opt-in example.
+import {sql} from 'drizzle-orm';
 import {integer,sqliteTable,text,index,uniqueIndex,primaryKey,type AnySQLiteColumn} from 'drizzle-orm/sqlite-core';
-export const members=sqliteTable('members',{id:text('id').primaryKey(),name:text('name').notNull(),email:text('email').notNull(),role:text('role').notNull().default('member'),phone:text('phone').notNull().default(''),department:text('department').notNull().default('')});
+export const members=sqliteTable('members',{id:text('id').primaryKey(),name:text('name').notNull(),email:text('email').notNull(),role:text('role').notNull().default('member'),phone:text('phone').notNull().default(''),department:text('department').notNull().default(''),authId:text('auth_id').unique()},t=>[uniqueIndex('members_email_unique').on(sql`lower(trim(${t.email}))`)]);
 export const workspace=sqliteTable('workspace',{id:integer('id').primaryKey(),owner:text('owner').notNull()});
 export const organization=sqliteTable('organization',{id:integer('id').primaryKey(),name:text('name').notNull(),revision:integer('revision').notNull().default(0)});
 export const orgRoles=sqliteTable('org_roles',{id:text('id').primaryKey(),name:text('name').notNull().unique(),parentId:text('parent_id').references(():AnySQLiteColumn=>orgRoles.id)});
