@@ -44,7 +44,9 @@ export async function applyForLoan(u:any,b:any){
  const d=db(),org=await readOrganization(),type=org.loanTypes.find(t=>t.id===b.typeId&&t.active);
  if(!type)throw Error('Choose an enabled loan type.');
  if(b.organizationRevision!==org.revision)return json({error:'Loan settings changed. Refresh and review the application again.'},409);
- if(!type.steps.length||type.steps.some(r=>!org.assignments.some(a=>a.role_id===r&&a.member_id!==u.id)))throw Error('An approval role needs an eligible reviewer. Please contact your administrator. Applicants cannot approve their own loans.');
+ if(!type.steps.length)throw Error('This loan type needs an approval workflow. Please contact your administrator.');
+ // Every enrolled member may apply, even when their role is on the approval route.
+ // The application stays pending until a different eligible reviewer can act.
  const q=quote(Number(b.amount),Number(b.term)),purpose=string(b.purpose,10,1000);
  if(!Array.isArray(b.documentIds)||b.documentIds.length>5||new Set(b.documentIds).size!==b.documentIds.length)throw Error('Attach up to five different documents.');
  for(const id of b.documentIds){if(typeof id!=='string'||!await d.prepare('SELECT id FROM documents WHERE id=? AND member_id=? AND NOT EXISTS (SELECT 1 FROM loan_documents WHERE document_id=documents.id)').bind(id,u.id).first())throw Error('An attachment is unavailable or already linked to another loan.');}
@@ -74,3 +76,4 @@ export async function reviewLoan(u:any,b:any){
  if(!result[0].meta.changes)return json({error:'Another reviewer updated this step. Refresh before retrying.'},409);
  return json({message:!approved?'Application rejected. Member notified.':last?'Final approval complete. Payment schedule created.':'Step approved. The application is now with the next approval role.'});
 }
+

@@ -69,6 +69,17 @@ await assert.rejects(saveMember(admin,{...person,memberId:enrollment.id,email:'h
 assert.equal((await saveMember(admin,{...person,memberId:enrollment.id,email:'updated@example.com',department:'Operations'})).status,200);
 assert.equal((await resolveEnrolledMember(d,{userId:'admin',email:'admin@example.test'},true)).role,'admin');
 const invalidMemberOrg=await readOrganization();invalidMemberOrg.assignments.push({member_id:'not-enrolled',role_id:'staff'});await assert.rejects(saveOrganization(admin,{organization:invalidMemberOrg}));
+// Membership, not organizational role, determines who can request a loan.
+org=await readOrganization();
+for(const id of ['applicant','admin','president']){
+ const response=await applyForLoan({id,role:id==='admin'?'admin':'member'},{...body,organizationRevision:org.revision,documentIds:[],memberId:'other'});
+ assert.equal(response.status,200);
+ const {loanId:requestedId}=await response.json();
+ const requested=sql.prepare('SELECT * FROM loans WHERE id=?').get(requestedId);
+ assert.equal(requested.member_id,id);assert.equal(requested.status,'pending');
+ assert.equal((await reviewLoan({id},{loanId:requestedId,position:1,decision:'approve',reason:'Attempt own approval'})).status,403);
+}
 sql.close();delete globalThis.__workflowDB;
 console.log('PASS: personal-email enrollment, duplicate prevention, enrollment-first role assignment, verified identity linking, stable member records, email edit locking and unauthorized enrollment.');
 console.log('PASS: cent-exact monthly breakdown, organization validation, role permissions, self-approval, ordered/final approvals, rejection, concurrency, snapshot preservation, document ownership/linking and revision conflicts.');
+
