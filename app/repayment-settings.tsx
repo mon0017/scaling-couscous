@@ -1,0 +1,18 @@
+'use client';
+import {useState} from 'react';
+import {money,type Loan} from './shared';
+import {policies,repaymentFields,repaymentLabel,today} from './repayment';
+
+export function RepaymentSettings({loan,admin,busy,onSave}:{loan:Loan;admin:boolean;busy:boolean;onSave:(body:any)=>Promise<boolean>}){
+ const [editing,setEditing]=useState(false),[error,setError]=useState('');
+ const history=policies(loan),current=[...history].reverse().find(p=>p.effective<=today()),latest=history.at(-1);
+ return <section className="application-section"><div className="split"><h3>Repayment & late interest</h3>{admin&&['pending','active'].includes(loan.status)&&<button type="button" className="btn" onClick={()=>{setError('');setEditing(!editing)}}>{editing?'Cancel':'Edit repayment settings'}</button>}</div>
+ <p><strong>{repaymentLabel(loan)}</strong></p><p className="small muted">{loan.repayment_method==='self_pay'?'The member pays each installment by its due date. An administrator records the payment.':'Repayment is designated for payroll deduction. An administrator must record each received deduction; this app does not run payroll.'}</p>
+ <p>Late interest: <strong>{(current?.rateBps||0)/100}% per month</strong></p>{latest&&latest.effective>today()&&<p className="notice">Scheduled rate: {latest.rateBps/100}% from {latest.effective}.</p>}
+ <p className="small muted">Simple interest on unpaid overdue installments, from the day after the due date. Daily rate = monthly rate ÷ 30. No interest on interest. Payments reduce installments first, then late interest.</p>
+ <p>Unpaid late interest: <strong>{money(loan.late_interest_due||0)}</strong>{loan.balance_as_of&&<span className="small muted"> · as of {loan.balance_as_of}</span>}</p>
+ {editing&&<form onSubmit={async e=>{e.preventDefault();try{setError('');const values=Object.fromEntries(new FormData(e.currentTarget));repaymentFields(values);if(await onSave({...values,loanId:loan.id,revision:loan.repayment_revision||0}))setEditing(false)}catch(e:any){setError(e.message)}}}><div className="form-grid"><label className="field">Collection method<select className="input" name="method" defaultValue={loan.repayment_method||'auto_deduct'}><option value="auto_deduct">Automatic payroll deduction</option><option value="self_pay">Member pays on their own</option></select></label><label className="field">Monthly late-interest rate (%)<input name="monthlyRate" className="input" type="number" inputMode="decimal" min="0" max="100" step="0.01" required defaultValue={(latest?.rateBps||0)/100}/><small>Use 0% to stop future late-interest accrual.</small></label></div><p className="notice">{loan.status==='pending'?'This rate applies only after an approved loan installment becomes overdue.':'Rate changes take effect tomorrow. Previously accrued interest is preserved.'}</p>{error&&<p className="error" role="alert">{error}</p>}<button className="btn primary" disabled={busy}>{busy?'Saving…':'Save repayment settings'}</button></form>}
+ {history.length>0&&<details><summary>Rate history</summary>{history.map(p=><p className="small" key={p.effective}>{p.effective==='0001-01-01'?'Original loan terms':p.effective}: {p.rateBps/100}% monthly</p>)}</details>}
+ </section>;
+}
+
