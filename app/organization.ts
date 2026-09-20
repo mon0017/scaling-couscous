@@ -1,6 +1,6 @@
 export type OrgRole={id:string;name:string;parent_id:string|null};
 export type LoanType={id:string;name:string;active:number;steps:string[]};
-export type Organization={name:string;revision:number;roles:OrgRole[];assignments:{member_id:string;role_id:string}[];loanTypes:LoanType[]};
+export type Organization={name:string;revision:number;default_late_rate_bps?:number;roles:OrgRole[];assignments:{member_id:string;role_id:string}[];loanTypes:LoanType[]};
 export function validateOrganization(value:any,memberIds:string[],existingRoleIds:string[]=[]):Organization{
  const label=(v:any,max=100)=>{if(typeof v!=='string'||!v.trim()||v.trim().length>max)throw Error('Names must contain 1–100 characters.');return v.trim()};
  const id=(v:any)=>{if(typeof v!=='string'||! /^[a-zA-Z0-9_-]{1,80}$/.test(v))throw Error('Invalid organization identifier.');return v};
@@ -15,7 +15,8 @@ export function validateOrganization(value:any,memberIds:string[],existingRoleId
  const loanTypes:LoanType[]=value.loanTypes.map((t:any)=>{if(!Array.isArray(t.steps)||(t.active&&t.steps.length<1)||t.steps.length>20||t.steps.some((r:any)=>!roles.some(x=>x.id===r))||!distinct(t.steps))throw Error('Enabled loan types need 1–20 distinct approval roles in order.');if(t.active!==0&&t.active!==1)throw Error('Invalid loan type status.');return{id:id(t.id),name:label(t.name),active:t.active,steps:t.steps}});
  if(!distinct(loanTypes.map(t=>t.id))||!distinct(loanTypes.map(t=>t.name.toLowerCase())))throw Error('Loan type names must be unique.');
  if(loanTypes.some(t=>t.active&&t.steps.some(r=>!assignments.some((a:any)=>a.role_id===r))))throw Error('Assign at least one member to every approval role used by an enabled loan type.');
- return{name:label(value.name),revision:value.revision,roles,assignments,loanTypes};
+ const defaultRate=value.default_late_rate_bps??300;if(!Number.isInteger(defaultRate)||defaultRate<0||defaultRate>10000)throw Error('Default monthly late interest must be 0–100%, with at most two decimal places.');
+ return{default_late_rate_bps:defaultRate,name:label(value.name),revision:value.revision,roles,assignments,loanTypes};
 }
 export function currentApproval(steps:any[]){return [...steps].sort((a,b)=>a.position-b.position).find(s=>s.status!=='approved')}
 export function canReviewLoan(userId:string,memberId:string,roles:string[],steps:any[]){const current=currentApproval(steps);return userId!==memberId&&current?.status==='pending'&&roles.includes(current.role_id)}
