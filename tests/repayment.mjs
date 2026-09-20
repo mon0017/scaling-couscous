@@ -24,7 +24,7 @@ assert.throws(()=>repaymentFields({method:'other',monthlyRate:1}));
 assert.equal(repaymentFields({method:'self_pay',monthlyRate:'2.75'}).rateBps,275);
 
 const sql=new DatabaseSync(':memory:');sql.exec('PRAGMA foreign_keys=ON');
-for(const file of ['0000_dizzy_zaladane','0001_organization_approvals','0002_member_enrollment','0003_repayment_policy'])sql.exec(readFileSync('drizzle/'+file+'.sql','utf8'));
+for(const file of ['0000_dizzy_zaladane','0001_organization_approvals','0002_member_enrollment','0003_repayment_policy','0004_late_waivers'])sql.exec(readFileSync('drizzle/'+file+'.sql','utf8'));
 sql.prepare('INSERT INTO members(id,name,email,role) VALUES(?,?,?,?)').run('member','Member','member@example.test','member');
 sql.prepare('INSERT INTO members(id,name,email,role) VALUES(?,?,?,?)').run('admin','Admin','admin@example.test','admin');
 sql.prepare('INSERT INTO loans(id,member_id,type,amount,term,rate,total,paid,status,purpose,created_at,start_date,late_policy) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run('loan','member','Personal',300000,3,0,300000,0,'active','Test','2025-12-01','2026-01-01',loan.late_policy);
@@ -32,7 +32,7 @@ class Statement{constructor(text,params=[]){this.text=text;this.params=params}bi
 globalThis.__repaymentDB={prepare:text=>new Statement(text),batch:async statements=>{sql.exec('BEGIN');try{const out=statements.map(s=>s.run());sql.exec('COMMIT');return out}catch(e){sql.exec('ROLLBACK');throw e}}};
 const server=moduleUrl("export const db=()=>globalThis.__repaymentDB;export const json=(d,status=200)=>Response.json(d,{status});export const string=v=>{if(typeof v!=='string'||!v.trim())throw Error('Invalid text');return v.trim()};export const notice=()=>{};");
 const service=moduleUrl(readFileSync('app/repayment-service.ts','utf8').replace("'./server'",JSON.stringify(server)).replace("'./repayment'",JSON.stringify(repayment)));
-const {saveRepayment,recordRepayment}=await import(service);
+const {saveRepayment,recordRepayment,waiveInterest}=await import(service);
 const admin={id:'admin',role:'admin'},member={id:'member',role:'member'};
 assert.equal((await saveRepayment(member,{loanId:'loan'})).status,403);
 assert.equal((await recordRepayment(member,{})).status,403);
@@ -45,6 +45,20 @@ current=sql.prepare('SELECT * FROM loans WHERE id=?').get('loan');assert.equal(c
 assert.equal((await recordRepayment(admin,pay)).status,200);
 assert.equal(sql.prepare('SELECT count(*) AS n FROM payments').get().n,1);
 assert.equal((await recordRepayment(admin,{...pay,amount:1})).status,409);
+sql.prepare("UPDATE loans SET status='active',paid=0,repayment_revision=0,late_policy=? WHERE id='loan'").run(loan.late_policy);sql.exec('DELETE FROM payments');
+assert.equal((await waiveInterest(member,{})).status,403);
+const before=repaymentBalance(sql.prepare("SELECT * FROM loans WHERE id='loan'").get(),[]);
+assert.equal((await waiveInterest(admin,{loanId:'loan',revision:0,amount:10,reason:'Hardship support'})).status,200);
+let waived=sql.prepare("SELECT * FROM loans WHERE id='loan'").get();
+assert.equal(repaymentBalance(waived,[]).interestDue,before.interestDue-1000);
+assert.equal(JSON.parse(waived.late_waivers)[0].reason,'Hardship support');
+assert.equal(JSON.parse(waived.late_waivers)[0].adminId,'admin');
+assert.equal(repaymentBalance(waived,[],'2026-01-31').interestDue,3000);
+assert.equal((await waiveInterest(admin,{loanId:'loan',revision:0,amount:10,reason:'Duplicate'})).status,409);
+await assert.rejects(()=>waiveInterest(admin,{loanId:'loan',revision:1,amount:999999,reason:'Too much'}));
+await assert.rejects(()=>recordRepayment(admin,{loanId:'loan',amount:10,date:'2026-01-11',reference:'backdated'}));
+assert.equal((await waiveInterest(admin,{loanId:'loan',revision:1,amount:(before.interestDue-1000)/100,reason:'Full hardship waiver'})).status,200);
+waived=sql.prepare("SELECT * FROM loans WHERE id='loan'").get();assert.equal(repaymentBalance(waived,[]).interestDue,0);
+assert.ok(repaymentBalance(waived,[],nextDay(today())).interestDue>0);
 sql.close();delete globalThis.__repaymentDB;
 console.log('PASS: daily simple late interest, partial/on-time/late payments, rate changes, 0% disable, component allocation, admin-only settings/payments, migration, version conflicts, payoff and duplicate prevention.');
-
