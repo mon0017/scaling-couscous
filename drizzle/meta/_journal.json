@@ -22,6 +22,13 @@
       "when": 1789789026959,
       "tag": "0002_member_enrollment",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1789839618830,
+      "tag": "0003_repayment_policy",
+      "breakpoints": true
     }
   ]
 }
