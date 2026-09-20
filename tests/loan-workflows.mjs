@@ -15,6 +15,8 @@ sql.exec(readFileSync('drizzle/0000_dizzy_zaladane.sql','utf8'));
 for(const id of ['admin','applicant','staff','manager','president','other'])sql.prepare('INSERT INTO members (id,name,email,role) VALUES (?,?,?,?)').run(id,id,id+'@example.test',id==='admin'?'admin':'member');
 sql.exec(readFileSync('drizzle/0001_organization_approvals.sql','utf8'));
 sql.exec(readFileSync('drizzle/0002_member_enrollment.sql','utf8'));
+sql.exec(readFileSync('drizzle/0003_repayment_policy.sql','utf8'));
+sql.exec(readFileSync('drizzle/0004_late_waivers.sql','utf8'));
 class Statement{constructor(text,params=[]){this.text=text;this.params=params}bind(...params){return new Statement(this.text,params)}async first(){return sql.prepare(this.text).get(...this.params)||null}async all(){return{results:sql.prepare(this.text).all(...this.params)}}run(){const result=sql.prepare(this.text).run(...this.params);return{meta:{changes:Number(result.changes)}}}}
 const d={prepare:text=>new Statement(text),batch:async statements=>{sql.exec('BEGIN');try{const result=[];for(const s of statements)result.push(s.run());sql.exec('COMMIT');return result}catch(e){sql.exec('ROLLBACK');throw e}}};
 globalThis.__workflowDB=d;
@@ -82,4 +84,3 @@ for(const id of ['applicant','admin','president']){
 sql.close();delete globalThis.__workflowDB;
 console.log('PASS: personal-email enrollment, duplicate prevention, enrollment-first role assignment, verified identity linking, stable member records, email edit locking and unauthorized enrollment.');
 console.log('PASS: cent-exact monthly breakdown, organization validation, role permissions, self-approval, ordered/final approvals, rejection, concurrency, snapshot preservation, document ownership/linking and revision conflicts.');
-

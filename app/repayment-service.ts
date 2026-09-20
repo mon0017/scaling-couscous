@@ -1,6 +1,26 @@
 import {db,json,string,notice} from './server';
-import {repaymentFields,repaymentBalance,policies,nextDay,today,validDate} from './repayment';
+import {repaymentFields,repaymentBalance,policies,nextDay,today,validDate,waivers} from './repayment';
 import type {Loan,Payment} from './shared';
+
+export async function waiveInterest(u:any,b:any){
+ if(u.role!=='admin')return json({error:'Administrator access required.'},403);
+ const d=db(),l=await d.prepare('SELECT * FROM loans WHERE id=?').bind(string(b.loanId)).first<Loan>();
+ if(!l)return json({error:'Loan not found.'},404);
+ if(l.status!=='active')throw Error('Only active loans can receive a late-interest waiver.');
+ if(b.revision!==l.repayment_revision)return json({error:'Loan changed. Refresh before waiving interest.'},409);
+ const value=Number(b.amount),amount=Math.round(value*100),reason=string(b.reason,5,500);
+ if(!Number.isFinite(value)||!Number.isSafeInteger(amount)||amount<1||Math.abs(value*100-amount)>.00001)throw Error('Enter a positive amount with at most two decimal places.');
+ const payments=(await d.prepare('SELECT * FROM payments WHERE loan_id=? ORDER BY paid_at').bind(l.id).all<Payment>()).results;
+ const balance=repaymentBalance(l,payments),date=today();
+ if(amount>balance.interestDue)throw Error('Waiver exceeds the unpaid late interest. Refresh the loan balance.');
+ const record={id:crypto.randomUUID(),amount,date,reason,adminId:u.id,adminName:u.name||u.id,createdAt:new Date().toISOString()};
+ const result=await d.batch([
+  d.prepare("UPDATE loans SET late_waivers=?,repayment_revision=repayment_revision+1,status=? WHERE id=? AND repayment_revision=? AND status='active'").bind(JSON.stringify([...waivers(l),record]),balance.baseDue===0&&amount===balance.interestDue?'completed':'active',l.id,l.repayment_revision),
+  d.prepare('INSERT INTO notifications (id,member_id,title,body,kind,read,created_at) SELECT ?,?,?,?,?,0,? WHERE changes()=1').bind(crypto.randomUUID(),l.member_id,'Late interest waived',`${l.id}: PHP ${(amount/100).toFixed(2)} waived. Reason: ${reason}. Future late-interest rates are unchanged.`,'loan',new Date().toISOString())
+ ]);
+ if(!result[0].meta.changes)return json({error:'Loan changed. Refresh before retrying.'},409);
+ return json({message:'Late-interest waiver recorded. Future rate unchanged.'});
+}
 
 export async function saveRepayment(u:any,b:any){
  if(u.role!=='admin')return json({error:'Administrator access required.'},403);
@@ -31,7 +51,7 @@ export async function recordRepayment(u:any,b:any){
  if(!l)return json({error:'Loan not found.'},404);
  if(l.status!=='active')throw Error('Only active loans accept payments.');
  const history=(await d.prepare('SELECT * FROM payments WHERE loan_id=? ORDER BY paid_at').bind(id).all<Payment>()).results;
- if(date<l.created_at.slice(0,10)||history.some(p=>p.paid_at>date))throw Error('Payment date must be on or after the application date and the most recent recorded payment.');
+ if(date<l.created_at.slice(0,10)||history.some(p=>p.paid_at>date)||waivers(l).some(w=>w.date>date))throw Error('Payment date must be on or after the application date and the most recent recorded payment or waiver.');
  const balance=repaymentBalance(l,history,date);
  if(amount>balance.totalDue)throw Error('Payment exceeds the balance on the selected payment date.');
  // Pay contractual installments first, then late interest. Preserve both components.
@@ -45,4 +65,3 @@ export async function recordRepayment(u:any,b:any){
  if(!result[0].meta.changes)return json({error:'Balance or settings changed. Refresh before retrying.'},409);
  return json({message:'Payment recorded and receipt created.'});
 }
-

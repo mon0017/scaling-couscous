@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {pathToFileURL} from 'node:url';
+import ts from 'typescript';
+const compile=s=>'data:text/javascript;base64,'+Buffer.from(ts.transpileModule(s,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText).toString('base64');
+const shared=pathToFileURL(process.cwd()+'/app/shared.ts').href;
+const repayment=compile(readFileSync('app/repayment.ts','utf8').replace("'./shared'",JSON.stringify(shared)));
+const {borrowerGroups,filterBorrowers}=await import(compile(readFileSync('app/admin-model.ts','utf8').replace("'./shared'",JSON.stringify(shared)).replace("'./repayment'",JSON.stringify(repayment))));
+const members=Array.from({length:100},(_,i)=>({id:String(i),name:'Same name',email:`member${i}@example.test`}));
+const loans=members.flatMap((m,i)=>[0,1].map(j=>({id:`L-${i}-${j}`,member_id:m.id,name:m.name,type:'Personal',total:120000,paid:20000,term:12,start_date:'2020-01-01',status:j?'pending':'active'})));
+const groups=borrowerGroups(members,loans);assert.equal(groups.length,100);assert.ok(groups.every(g=>g.loans.length===2&&g.balance===100000&&g.pending===1&&g.overdue===100000));
+assert.equal(filterBorrowers(groups,'member99@','all','name')[0].id,'99');assert.equal(filterBorrowers(groups,'L-25-1','all','name')[0].id,'25');
+assert.equal(filterBorrowers(groups,'','overdue','balance').length,100);assert.equal(filterBorrowers(groups,'','none','name').length,0);
+assert.equal(borrowerGroups([],loans).length,100);
+console.log('PASS: 100 distinct borrower accounts, same-name isolation, loan grouping, balances, overdue, email/loan search and filters.');

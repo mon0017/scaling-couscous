@@ -1,5 +1,7 @@
 import {schedule,type Loan,type Payment} from './shared';
 
+export type LateWaiver={id:string;amount:number;date:string;reason:string;adminId:string;adminName:string;createdAt:string};
+export const waivers=(loan:Loan):LateWaiver[]=>JSON.parse(loan.late_waivers||'[]');
 export type LatePolicy={effective:string;rateBps:number};
 export const today=()=>new Date().toISOString().slice(0,10);
 const day=(date:string)=>Date.parse(date+'T00:00:00Z')/86400000;
@@ -43,7 +45,6 @@ export function repaymentBalance(loan:Loan,payments:Payment[],asOf=today()){
   }
   preceding+=row.amount;
  }
- const accrued=Math.round(weighted/300000),interestDue=Math.max(0,accrued-interestPaid),baseDue=Math.max(0,loan.total-basePaid);
+ const accrued=Math.round(weighted/300000),interestDue=Math.max(0,accrued-interestPaid-waivers(loan).filter(w=>w.date<=asOf).reduce((sum,w)=>sum+w.amount,0)),baseDue=Math.max(0,loan.total-basePaid);
  return {baseDue,interestDue,accrued,interestPaid,totalDue:baseDue+interestDue,asOf};
 }
-
