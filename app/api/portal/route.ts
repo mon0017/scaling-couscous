@@ -1,4 +1,4 @@
-import {saveRepayment,recordRepayment} from '../../repayment-service';
+import {saveRepayment,recordRepayment,waiveInterest} from '../../repayment-service';
 import {repaymentBalance,today} from '../../repayment';
 import {readOrganization,saveOrganization,applyForLoan,reviewLoan,saveMember} from '../../workflows';
 import {db,identity,json,sameOrigin,string,notice} from '../../server';
@@ -20,18 +20,17 @@ export async function GET(request:Request){try{if(new URL(request.url).searchPar
  for(const loan of loans){const balance=repaymentBalance(loan,ledger,asOf);Object.assign(loan,{late_interest_due:balance.interestDue,late_interest_accrued:balance.accrued,balance_due:balance.totalDue,balance_as_of:asOf});}
  return json({preview:false,organization:{...organization,assignments:admin?organization.assignments:[]},ownRoles,approvals,user,loans,payments:payments.results,members:members.results,documents:documents.results,notifications:notifications.results,messages:messages.results});
  }catch(e){console.error('Portal read failed',e);return json({error:'Your workspace is temporarily unavailable. Please retry.'},503)}}
-export async function POST(request:Request){try{sameOrigin(request);const u=await identity();if(!u)return json({error:'Sign in to continue.'},401);if(Number(request.headers.get('content-length')||0)>256000)return json({error:'Request too large'},413);const b:any=await request.json(),d=db();if(['repayment','payment','announcement','organization','saveMember'].includes(b.action)&&u.role!=='admin')return json({error:'Administrator access required.'},403);
+export async function POST(request:Request){try{sameOrigin(request);const u=await identity();if(!u)return json({error:'Sign in to continue.'},401);if(Number(request.headers.get('content-length')||0)>256000)return json({error:'Request too large'},413);const b:any=await request.json(),d=db();if(['waiveInterest','repayment','payment','announcement','organization','saveMember'].includes(b.action)&&u.role!=='admin')return json({error:'Administrator access required.'},403);
  if(b.action==='saveMember')return await saveMember(u,b);
  if(b.action==='organization')return await saveOrganization(u,b);
  if(b.action==='apply')return await applyForLoan(u,b);
  if(b.action==='profile'){await d.prepare('UPDATE members SET name=?,phone=?,department=? WHERE id=?').bind(string(b.name,1,100),string(b.phone||' ',0,30),string(b.department||' ',0,100),u.id).run();return json({message:'Profile updated.'})}
  if(b.action==='readNotifications'){await d.prepare('UPDATE notifications SET read=1 WHERE member_id=?').bind(u.id).run();return json({message:'Notifications marked as read.'})}
  if(b.action==='decision')return await reviewLoan(u,b);
+ if(b.action==='waiveInterest')return await waiveInterest(u,b);
  if(b.action==='repayment')return await saveRepayment(u,b);
  if(b.action==='payment')return await recordRepayment(u,b);
  if(b.action==='announcement'){const title=string(b.title,1,100),body=string(b.body,1,2000);await d.prepare('INSERT INTO notifications (id,member_id,title,body,kind,read,created_at) SELECT ? || id,id,?,?,?,0,? FROM members').bind(crypto.randomUUID(),title,body,'announcement',new Date().toISOString()).run();return json({message:'Announcement delivered to members’ in-app notifications.'})}
  if(b.action==='message'){const body=string(b.body,1,2000);const owner=await d.prepare('SELECT owner FROM workspace WHERE id=1').first<any>();const recipient=u.role==='admin'&&b.recipient?string(b.recipient):owner.owner;if(!await d.prepare('SELECT id FROM members WHERE id=?').bind(recipient).first())throw Error('Select a valid recipient.');await d.batch([d.prepare('INSERT INTO messages (id,sender,recipient,body,created_at) VALUES (?,?,?,?,?)').bind(crypto.randomUUID(),u.id,recipient,body,new Date().toISOString()),notice(recipient,'New message',`${u.name} sent you a message.`,'message')]);return json({message:'Message sent.'})}
  return json({error:'Unknown action'},400);
  }catch(e:any){const message=e?.message||'';if(/Database|D1_|SQLITE|fetch failed|binding/i.test(message)){console.error('Portal mutation failed',e);return json({error:'Could not save right now. Please refresh before retrying.'},503)}return json({error:message||'Invalid request'},400)}}
-
-
