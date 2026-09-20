@@ -38,7 +38,7 @@ export async function saveOrganization(u:any,b:any){
  // validation read but before this configuration batch acquires the database.
  statements.push(d.prepare("INSERT INTO organization (id,name,revision) SELECT 1,'missing reviewer',0 WHERE EXISTS (SELECT 1 FROM loan_approvals a JOIN loans l ON l.id=a.loan_id WHERE a.status='pending' AND l.status='pending' AND EXISTS (SELECT 1 FROM json_each(?) previous WHERE json_extract(previous.value,'$.role_id')=a.role_id AND json_extract(previous.value,'$.member_id')<>l.member_id) AND NOT EXISTS (SELECT 1 FROM member_roles mr WHERE mr.role_id=a.role_id AND mr.member_id<>l.member_id))").bind(JSON.stringify(old.assignments)));
  for(const t of org.loanTypes){statements.push(d.prepare('INSERT INTO loan_types (id,name,active) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,active=excluded.active').bind(t.id,t.name,t.active));t.steps.forEach((r,i)=>statements.push(d.prepare('INSERT INTO approval_routes (type_id,position,role_id) VALUES (?,?,?)').bind(t.id,i+1,r)))}
- statements.push(d.prepare('UPDATE organization SET name=?,revision=revision+1 WHERE id=1').bind(org.name));await d.batch(statements);return json({message:'Organization and approval routes saved. Existing applications keep their original steps.'});
+ statements.push(d.prepare('UPDATE organization SET name=?,default_late_rate_bps=?,revision=revision+1 WHERE id=1').bind(org.name,org.default_late_rate_bps??300));await d.batch(statements);return json({message:'Organization and approval routes saved. Existing applications keep their original steps.'});
 }
 export async function applyForLoan(u:any,b:any){
  const d=db(),org=await readOrganization(),type=org.loanTypes.find(t=>t.id===b.typeId&&t.active);
@@ -51,7 +51,7 @@ export async function applyForLoan(u:any,b:any){
  if(!Array.isArray(b.documentIds)||b.documentIds.length>5||new Set(b.documentIds).size!==b.documentIds.length)throw Error('Attach up to five different documents.');
  for(const id of b.documentIds){if(typeof id!=='string'||!await d.prepare('SELECT id FROM documents WHERE id=? AND member_id=? AND NOT EXISTS (SELECT 1 FROM loan_documents WHERE document_id=documents.id)').bind(id,u.id).first())throw Error('An attachment is unavailable or already linked to another loan.');}
  const id='LN-'+crypto.randomUUID().slice(0,8).toUpperCase(),now=new Date().toISOString();
- const statements=[revisionGuard(org.revision),d.prepare('INSERT INTO loans (id,member_id,type,amount,term,rate,total,paid,status,purpose,created_at,start_date) VALUES (?,?,?,?,?,6,?,0,?,?,?,?)').bind(id,u.id,type.name,q.principal,Number(b.term),q.total,'pending',purpose,now,'')];
+ const statements=[revisionGuard(org.revision),d.prepare('INSERT INTO loans (id,member_id,type,amount,term,rate,total,paid,status,purpose,created_at,start_date,late_policy) VALUES (?,?,?,?,?,6,?,0,?,?,?,?,?)').bind(id,u.id,type.name,q.principal,Number(b.term),q.total,'pending',purpose,now,'',JSON.stringify([{effective:'0001-01-01',rateBps:org.default_late_rate_bps??300}]))];
  type.steps.forEach((r,i)=>statements.push(d.prepare('INSERT INTO loan_approvals (loan_id,position,role_id,role_name) VALUES (?,?,?,?)').bind(id,i+1,r,org.roles.find(x=>x.id===r)!.name)));
  for(const documentId of b.documentIds)statements.push(d.prepare('INSERT INTO loan_documents (loan_id,document_id) VALUES (?,?)').bind(id,documentId));
  statements.push(notice(u.id,'Application received',`${id} is awaiting ${org.roles.find(r=>r.id===type.steps[0])!.name}.`));
@@ -76,4 +76,3 @@ export async function reviewLoan(u:any,b:any){
  if(!result[0].meta.changes)return json({error:'Another reviewer updated this step. Refresh before retrying.'},409);
  return json({message:!approved?'Application rejected. Member notified.':last?'Final approval complete. Payment schedule created.':'Step approved. The application is now with the next approval role.'});
 }
-
