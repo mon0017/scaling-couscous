@@ -28,9 +28,14 @@ Cloudflare Access remains the outer sign-in gate. Its policy must allow the enro
 ## Repayment collection and late interest
 Admins edit each pending or active loan in Loan details > Repayment & late interest. Choose automatic payroll deduction or member-paid. Automatic deduction is a collection designation; the app does not initiate payroll withdrawals. Only administrators record received payments.
 
-Existing and new loans default to automatic deduction with 0% late interest. Admins may set 0–100% monthly in 0.01% increments. Pending-loan rates apply after installments become overdue; active-loan changes start the next UTC day. Historical rates are preserved. Setting 0% stops future accrual without erasing prior charges.
+New applications default to automatic deduction and 3% monthly late interest. Admins change the default under Organization > Loan approvals. Existing loans preserve their original saved rates; there is no retroactive 3% charge. Admins may set 0–100% monthly in 0.01% increments. Pending-loan rates apply after installments become overdue; active-loan changes start the next UTC day. Historical rates are preserved. Setting 0% stops future accrual without erasing prior charges.
 
 Simple interest applies to overdue unpaid contractual installments starting the day after the due date, at monthly percentage / 30 per day. Payments stop accrual on the paid portion from the next day. No compounding; sum accrual before rounding to cents. The API calculates from the actual payment ledger, as of today or the selected payment date.
 
-Payments settle oldest contractual installments first, then late interest. Dates cannot precede the application or latest recorded payment. Receipts retain separate late-interest amounts. Loan revision checks protect concurrent payments and policy edits; unique references prevent duplicate payments. Completion requires settling both contractual repayments and late interest.
+Payments settle oldest contractual installments first, then late interest. Dates cannot precede the application or latest recorded payment or waiver. Receipts retain separate late-interest amounts. Loan revision checks protect concurrent payments and policy edits; unique references prevent duplicate payments. Completion requires settling both contractual repayments and late interest.
 
+
+Admins can partially or fully waive unpaid late interest in Loan details, with a required reason. Immutable waiver history stores amount, UTC date, administrator and timestamp. Waivers reduce accrued interest only; future accrual continues unless the admin separately changes the rate. Atomic revision checks prevent stale waivers and concurrent over-waiving.
+
+## Admin member accounts
+Member loans groups every loan by stable member ID, with search, overdue/status filters, balance sorting and 15-row pagination. Each member account includes scoped loans, payments and documents. Enrollment remains in Members; Organization manages roles, approval routes and default late-interest rate. The demo includes 100 additional fictional members; member mode shows only the signed-in sample member.
