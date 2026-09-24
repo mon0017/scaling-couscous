@@ -1,3 +1,4 @@
+import {importDeductions} from '../../payroll-service';
 import {saveRepayment,recordRepayment,waiveInterest} from '../../repayment-service';
 import {repaymentBalance,today} from '../../repayment';
 import {readOrganization,saveOrganization,applyForLoan,reviewLoan,saveMember} from '../../workflows';
@@ -18,9 +19,11 @@ export async function GET(request:Request){try{if(new URL(request.url).searchPar
  const asOf=today();
  const ledger=(await d.prepare('SELECT p.* FROM payments p JOIN loans l ON l.id=p.loan_id '+(admin?'':'WHERE '+scope)).bind(...(admin?[]:[user.id,user.id])).all()).results as any[];
  for(const loan of loans){const balance=repaymentBalance(loan,ledger,asOf);Object.assign(loan,{late_interest_due:balance.interestDue,late_interest_accrued:balance.accrued,balance_due:balance.totalDue,balance_as_of:asOf});}
- return json({preview:false,organization:{...organization,assignments:admin?organization.assignments:[]},ownRoles,approvals,user,loans,payments:payments.results,members:members.results,documents:documents.results,notifications:notifications.results,messages:messages.results});
+ const imports=admin?(await d.prepare('SELECT i.*,m.name AS recorded_by_name FROM payroll_imports i JOIN members m ON m.id=i.recorded_by ORDER BY i.created_at DESC LIMIT 100').all()).results:[];
+ return json({imports,preview:false,organization:{...organization,assignments:admin?organization.assignments:[]},ownRoles,approvals,user,loans,payments:payments.results,members:members.results,documents:documents.results,notifications:notifications.results,messages:messages.results});
  }catch(e){console.error('Portal read failed',e);return json({error:'Your workspace is temporarily unavailable. Please retry.'},503)}}
-export async function POST(request:Request){try{sameOrigin(request);const u=await identity();if(!u)return json({error:'Sign in to continue.'},401);if(Number(request.headers.get('content-length')||0)>256000)return json({error:'Request too large'},413);const b:any=await request.json(),d=db();if(['waiveInterest','repayment','payment','announcement','organization','saveMember'].includes(b.action)&&u.role!=='admin')return json({error:'Administrator access required.'},403);
+export async function POST(request:Request){try{sameOrigin(request);const u=await identity();if(!u)return json({error:'Sign in to continue.'},401);if(Number(request.headers.get('content-length')||0)>256000)return json({error:'Request too large'},413);const raw=await request.text();if(raw.length>256000)return json({error:'Request too large'},413);const b:any=JSON.parse(raw),d=db();if(['payrollImport','waiveInterest','repayment','payment','announcement','organization','saveMember'].includes(b.action)&&u.role!=='admin')return json({error:'Administrator access required.'},403);
+ if(b.action==='payrollImport')return await importDeductions(u,b);
  if(b.action==='saveMember')return await saveMember(u,b);
  if(b.action==='organization')return await saveOrganization(u,b);
  if(b.action==='apply')return await applyForLoan(u,b);
