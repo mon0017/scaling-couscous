@@ -59,7 +59,7 @@ export async function recordRepayment(u:any,b:any){
  const paymentId='RC-'+crypto.randomUUID().slice(0,8).toUpperCase();
  const result=await d.batch([
   d.prepare("UPDATE loans SET paid=paid+?,status=?,repayment_revision=repayment_revision+1 WHERE id=? AND status='active' AND repayment_revision=? AND NOT EXISTS (SELECT 1 FROM payments WHERE reference=?)").bind(baseAmount,amount===balance.totalDue?'completed':'active',id,l.repayment_revision,reference),
-  d.prepare('INSERT INTO payments (id,loan_id,amount,paid_at,reference,recorded_by,interest_amount) SELECT ?,?,?,?,?,?,? WHERE changes()=1').bind(paymentId,id,amount,date,reference,u.id,interestAmount),
+  d.prepare('INSERT INTO payments (id,loan_id,amount,paid_at,reference,recorded_by,interest_amount,recorded_at) SELECT ?,?,?,?,?,?,?,? WHERE changes()=1').bind(paymentId,id,amount,date,reference,u.id,interestAmount,new Date().toISOString()),
   d.prepare('INSERT INTO notifications (id,member_id,title,body,kind,read,created_at) SELECT ?,?,?,?,?,0,? WHERE changes()=1').bind(crypto.randomUUID(),l.member_id,'Payment received',`${paymentId}: PHP ${(amount/100).toFixed(2)} recorded, including PHP ${(interestAmount/100).toFixed(2)} late interest.`,'payment',new Date().toISOString())
  ]);
  if(!result[0].meta.changes)return json({error:'Balance or settings changed. Refresh before retrying.'},409);
