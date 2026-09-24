@@ -1,7 +1,7 @@
 import {readFileSync,writeFileSync,copyFileSync,mkdirSync} from 'node:fs';
 import {spawnSync} from 'node:child_process';
 const folder='work/public-demo';mkdirSync(folder,{recursive:true});
-for(const file of ['admin-model.ts','admin-workspace.tsx','repayment.ts','repayment-settings.tsx','shared.ts','sample.ts','request.ts','organization.ts','member-enrollment.ts','loan-application.tsx','organization-editor.tsx'])copyFileSync('app/'+file,folder+'/'+file);
+for(const file of ['payroll.ts','payroll-excel.ts','payroll-import.tsx','collections.ts','collections-dashboard.tsx','admin-model.ts','admin-workspace.tsx','repayment.ts','repayment-settings.tsx','shared.ts','sample.ts','request.ts','organization.ts','member-enrollment.ts','loan-application.tsx','organization-editor.tsx'])copyFileSync('app/'+file,folder+'/'+file);
 let portal=readFileSync('app/portal.tsx','utf8');const start=portal.indexOf(' async function refresh()'),end=portal.indexOf('\n useEffect',start);
 if(start<0||end<0)throw Error('Cannot locate portal refresh; review demo isolation before building.');
 portal=portal.slice(0,start)+' async function refresh(){setData(demoData);setLoading(false);return true}'+portal.slice(end);
