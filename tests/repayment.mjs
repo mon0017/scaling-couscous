@@ -24,7 +24,7 @@ assert.throws(()=>repaymentFields({method:'other',monthlyRate:1}));
 assert.equal(repaymentFields({method:'self_pay',monthlyRate:'2.75'}).rateBps,275);
 
 const sql=new DatabaseSync(':memory:');sql.exec('PRAGMA foreign_keys=ON');
-for(const file of ['0000_dizzy_zaladane','0001_organization_approvals','0002_member_enrollment','0003_repayment_policy','0004_late_waivers'])sql.exec(readFileSync('drizzle/'+file+'.sql','utf8'));
+for(const file of ['0000_dizzy_zaladane','0001_organization_approvals','0002_member_enrollment','0003_repayment_policy','0004_late_waivers','0005_payroll_imports'])sql.exec(readFileSync('drizzle/'+file+'.sql','utf8'));
 sql.prepare('INSERT INTO members(id,name,email,role) VALUES(?,?,?,?)').run('member','Member','member@example.test','member');
 sql.prepare('INSERT INTO members(id,name,email,role) VALUES(?,?,?,?)').run('admin','Admin','admin@example.test','admin');
 sql.prepare('INSERT INTO loans(id,member_id,type,amount,term,rate,total,paid,status,purpose,created_at,start_date,late_policy) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run('loan','member','Personal',300000,3,0,300000,0,'active','Test','2025-12-01','2026-01-01',loan.late_policy);
