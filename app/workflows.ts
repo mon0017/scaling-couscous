@@ -1,3 +1,4 @@
+import {auditStatement} from './audit';
 import {db,json,string,notice} from './server';
 import {quote} from './shared';
 import {validateOrganization,canReviewLoan,type Organization} from './organization';
@@ -10,8 +11,8 @@ export async function saveMember(u:any,b:any){
  if(existing?.auth_id&&existing.email.trim().toLowerCase()!==fields.email)throw Error('The email is locked after first sign-in. This protects the member’s account.');
  const duplicate=await d.prepare('SELECT id FROM members WHERE lower(trim(email))=? AND id<>?').bind(fields.email,existing?.id||'').first();
  if(duplicate)return json({error:'This email is already enrolled. Find the member in the directory instead.'},409);
- if(existing){const result=await d.prepare('UPDATE members SET name=?,email=?,phone=?,department=? WHERE id=? AND (auth_id IS NULL OR lower(trim(email))=?)').bind(fields.name,fields.email,fields.phone,fields.department,existing.id,fields.email).run();if(!result.meta.changes)return json({error:'This member has signed in. Refresh before editing their details.'},409)}
- else await d.prepare('INSERT INTO members (id,name,email,role,phone,department) VALUES (?,?,?,?,?,?)').bind('member-'+crypto.randomUUID(),fields.name,fields.email,'member',fields.phone,fields.department).run();
+ if(existing){const result=await d.batch([d.prepare('UPDATE members SET name=?,email=?,phone=?,department=? WHERE id=? AND (auth_id IS NULL OR lower(trim(email))=?) AND name=? AND email=? AND phone=? AND department=?').bind(fields.name,fields.email,fields.phone,fields.department,existing.id,fields.email,existing.name,existing.email,existing.phone,existing.department),auditStatement(d,u,'Member updated',existing.id,{name:existing.name,email:existing.email,phone:existing.phone,department:existing.department},fields,true)]);if(!result[0].meta.changes)return json({error:'This member changed or signed in. Refresh before editing their details.'},409)}
+ else {const memberId='member-'+crypto.randomUUID();await d.batch([d.prepare('INSERT INTO members (id,name,email,role,phone,department) VALUES (?,?,?,?,?,?)').bind(memberId,fields.name,fields.email,'member',fields.phone,fields.department),auditStatement(d,u,'Member enrolled',memberId,null,fields)]);}
  return json({message:existing?'Member details updated.':'Member enrolled. You can now assign roles. No invitation email has been sent.'});
 }
 
@@ -38,7 +39,7 @@ export async function saveOrganization(u:any,b:any){
  // validation read but before this configuration batch acquires the database.
  statements.push(d.prepare("INSERT INTO organization (id,name,revision) SELECT 1,'missing reviewer',0 WHERE EXISTS (SELECT 1 FROM loan_approvals a JOIN loans l ON l.id=a.loan_id WHERE a.status='pending' AND l.status='pending' AND EXISTS (SELECT 1 FROM json_each(?) previous WHERE json_extract(previous.value,'$.role_id')=a.role_id AND json_extract(previous.value,'$.member_id')<>l.member_id) AND NOT EXISTS (SELECT 1 FROM member_roles mr WHERE mr.role_id=a.role_id AND mr.member_id<>l.member_id))").bind(JSON.stringify(old.assignments)));
  for(const t of org.loanTypes){statements.push(d.prepare('INSERT INTO loan_types (id,name,active) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,active=excluded.active').bind(t.id,t.name,t.active));t.steps.forEach((r,i)=>statements.push(d.prepare('INSERT INTO approval_routes (type_id,position,role_id) VALUES (?,?,?)').bind(t.id,i+1,r)))}
- statements.push(d.prepare('UPDATE organization SET name=?,default_late_rate_bps=?,revision=revision+1 WHERE id=1').bind(org.name,org.default_late_rate_bps??300));await d.batch(statements);return json({message:'Organization and approval routes saved. Existing applications keep their original steps.'});
+ statements.push(d.prepare('UPDATE organization SET name=?,default_late_rate_bps=?,revision=revision+1 WHERE id=1').bind(org.name,org.default_late_rate_bps??300));statements.push(auditStatement(d,u,'Organization updated','organization',old,{...org,revision:org.revision+1}));await d.batch(statements);return json({message:'Organization and approval routes saved. Existing applications keep their original steps.'});
 }
 export async function applyForLoan(u:any,b:any){
  const d=db(),org=await readOrganization(),type=org.loanTypes.find(t=>t.id===b.typeId&&t.active);
@@ -56,7 +57,7 @@ export async function applyForLoan(u:any,b:any){
  for(const documentId of b.documentIds)statements.push(d.prepare('INSERT INTO loan_documents (loan_id,document_id) VALUES (?,?)').bind(id,documentId));
  statements.push(notice(u.id,'Application received',`${id} is awaiting ${org.roles.find(r=>r.id===type.steps[0])!.name}.`));
  for(const a of org.assignments.filter(a=>a.role_id===type.steps[0]&&a.member_id!==u.id))statements.push(notice(a.member_id,'Application ready for review',`${id} is waiting for your role.`));
- await d.batch(statements);return json({message:'Application and attachments submitted for review.',loanId:id});
+ statements.push(auditStatement(d,u,'Loan applied',id,null,{memberId:u.id,type:type.name,principal:q.principal,term:Number(b.term),total:q.total,documents:b.documentIds,approvalRoles:type.steps}));await d.batch(statements);return json({message:'Application and attachments submitted for review.',loanId:id});
 }
 export async function reviewLoan(u:any,b:any){
  const d=db(),id=string(b.loanId),reason=string(b.reason,5,1000);if(!['approve','reject'].includes(b.decision))throw Error('Choose approve or reject.');
@@ -71,6 +72,7 @@ export async function reviewLoan(u:any,b:any){
  d.prepare("UPDATE loan_approvals SET status=?,decided_by=?,decided_at=?,reason=? WHERE loan_id=? AND position=? AND status='pending' AND EXISTS (SELECT 1 FROM loans WHERE id=? AND status='pending' AND member_id<>?) AND EXISTS (SELECT 1 FROM member_roles WHERE member_id=? AND role_id=loan_approvals.role_id) AND NOT EXISTS (SELECT 1 FROM loan_approvals earlier WHERE earlier.loan_id=? AND earlier.position<? AND earlier.status<>'approved')").bind(approved?'approved':'rejected',u.id,now,reason,id,current.position,id,u.id,u.id,id,current.position),
  d.prepare('INSERT INTO notifications (id,member_id,title,body,kind,read,created_at) SELECT ?,?,?,?,?,0,? WHERE changes()=1').bind(crypto.randomUUID(),loan.member_id,!approved?'Application rejected':last?'Loan approved':'Approval step completed',`${id} · ${current.role_name}: ${reason}`,'loan',now),
  d.prepare("UPDATE loans SET status=?,start_date=?,decision_by=?,decision_reason=? WHERE changes()=1 AND id=? AND status='pending' AND EXISTS (SELECT 1 FROM loan_approvals WHERE loan_id=? AND position=? AND decided_by=? AND decided_at=?)").bind(!approved?'rejected':last?'active':'pending',approved&&last?date.toISOString().slice(0,10):'',u.id,reason,id,id,current.position,u.id,now),
+ auditStatement(d,u,approved?'Loan approval recorded':'Loan rejected',id,{status:loan.status,step:current.position},{status:!approved?'rejected':last?'active':'pending',step:current.position,role:current.role_name,reason},true),
  d.prepare("INSERT INTO notifications (id,member_id,title,body,kind,read,created_at) SELECT ? || mr.member_id,mr.member_id,'Application ready for review',?,'loan',0,? FROM member_roles mr JOIN loan_approvals a ON a.role_id=mr.role_id JOIN loans l ON l.id=a.loan_id WHERE changes()=1 AND a.loan_id=? AND a.position=? AND l.status='pending' AND mr.member_id<>l.member_id AND EXISTS (SELECT 1 FROM loan_approvals p WHERE p.loan_id=a.loan_id AND p.position=? AND p.decided_by=? AND p.decided_at=? AND p.status='approved')").bind(crypto.randomUUID(),`${id} is waiting for your role.`,now,id,current.position+1,current.position,u.id,now)
  ]);
  if(!result[0].meta.changes)return json({error:'Another reviewer updated this step. Refresh before retrying.'},409);
