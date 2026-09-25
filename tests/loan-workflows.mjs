@@ -17,11 +17,12 @@ sql.exec(readFileSync('drizzle/0001_organization_approvals.sql','utf8'));
 sql.exec(readFileSync('drizzle/0002_member_enrollment.sql','utf8'));
 sql.exec(readFileSync('drizzle/0003_repayment_policy.sql','utf8'));
 sql.exec(readFileSync('drizzle/0004_late_waivers.sql','utf8'));
+sql.exec(readFileSync('drizzle/0006_audit_trail.sql','utf8'));
 class Statement{constructor(text,params=[]){this.text=text;this.params=params}bind(...params){return new Statement(this.text,params)}async first(){return sql.prepare(this.text).get(...this.params)||null}async all(){return{results:sql.prepare(this.text).all(...this.params)}}run(){const result=sql.prepare(this.text).run(...this.params);return{meta:{changes:Number(result.changes)}}}}
 const d={prepare:text=>new Statement(text),batch:async statements=>{sql.exec('BEGIN');try{const result=[];for(const s of statements)result.push(s.run());sql.exec('COMMIT');return result}catch(e){sql.exec('ROLLBACK');throw e}}};
 globalThis.__workflowDB=d;
 const mock=`export const db=()=>globalThis.__workflowDB;export const json=(data,status=200)=>Response.json(data,{status});export function string(v,min=1,max=2000){if(typeof v!=='string'||v.trim().length<min||v.trim().length>max)throw Error('Invalid text');return v.trim()}export function notice(member,title,body,kind='loan',id=crypto.randomUUID()){return db().prepare('INSERT OR IGNORE INTO notifications (id,member_id,title,body,kind,read,created_at) VALUES (?,?,?,?,?,0,?)').bind(id,member,title,body,kind,new Date().toISOString())}`;
-const source=readFileSync('app/workflows.ts','utf8').replace("'./server'",JSON.stringify('data:text/javascript;base64,'+Buffer.from(mock).toString('base64'))).replace("'./shared'",JSON.stringify(pathToFileURL(process.cwd()+'/app/shared.ts').href)).replace("'./organization'",JSON.stringify(pathToFileURL(process.cwd()+'/app/organization.ts').href));
+const source=readFileSync('app/workflows.ts','utf8').replace("'./audit'",JSON.stringify(pathToFileURL(process.cwd()+'/app/audit.ts').href)).replace("'./server'",JSON.stringify('data:text/javascript;base64,'+Buffer.from(mock).toString('base64'))).replace("'./shared'",JSON.stringify(pathToFileURL(process.cwd()+'/app/shared.ts').href)).replace("'./organization'",JSON.stringify(pathToFileURL(process.cwd()+'/app/organization.ts').href));
 const enrollmentSource=source.replace("'./member-enrollment'",JSON.stringify(pathToFileURL(process.cwd()+'/app/member-enrollment.ts').href));
 const compiled=ts.transpileModule(enrollmentSource,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
 const {readOrganization,saveOrganization,applyForLoan,reviewLoan,saveMember}=await import('data:text/javascript;base64,'+Buffer.from(compiled).toString('base64'));
@@ -81,6 +82,33 @@ for(const id of ['applicant','admin','president']){
  assert.equal(requested.member_id,id);assert.equal(requested.status,'pending');
  assert.equal((await reviewLoan({id},{loanId:requestedId,position:1,decision:'approve',reason:'Attempt own approval'})).status,403);
 }
-sql.close();delete globalThis.__workflowDB;
+
 console.log('PASS: personal-email enrollment, duplicate prevention, enrollment-first role assignment, verified identity linking, stable member records, email edit locking and unauthorized enrollment.');
 console.log('PASS: cent-exact monthly breakdown, organization validation, role permissions, self-approval, ordered/final approvals, rejection, concurrency, snapshot preservation, document ownership/linking and revision conflicts.');
+
+const auditCount=sql.prepare('SELECT count(*) n FROM audit_events').get().n;
+assert.ok(auditCount>0,'Successful mutations create audit events');
+assert.throws(()=>sql.exec("UPDATE audit_events SET action='changed'"),/cannot be edited/);
+assert.throws(()=>sql.exec('DELETE FROM audit_events'),/cannot be deleted/);
+assert.equal(sql.prepare('SELECT count(*) n FROM audit_events').get().n,auditCount);
+
+
+assert.equal(sql.prepare("SELECT count(*) n FROM audit_events WHERE action IN ('Loan approval recorded','Loan rejected')").get().n,sql.prepare("SELECT count(*) n FROM loan_approvals WHERE status<>'pending'").get().n,'No audit duplicates for concurrent review attempts');
+const beforeRollback=sql.prepare('SELECT count(*) n FROM audit_events').get().n;
+const {auditStatement}=await import('../app/audit.ts');
+await assert.rejects(d.batch([auditStatement(d,admin,'Rollback test','test',null,{value:1}),d.prepare("INSERT INTO members(id,name,email,role) VALUES('admin','duplicate','duplicate@example.test','admin')")]));
+assert.equal(sql.prepare('SELECT count(*) n FROM audit_events').get().n,beforeRollback,'Audit insertion rolls back with the mutation');
+const auditMock=`export const db=()=>globalThis.__workflowDB;export const identity=async()=>globalThis.__auditUser;export const json=(data,status=200)=>Response.json(data,{status});`;
+const auditSource=readFileSync('app/api/audit/route.ts','utf8').replace("'../../server'",JSON.stringify('data:text/javascript;base64,'+Buffer.from(auditMock).toString('base64')));
+const auditCompiled=ts.transpileModule(auditSource,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
+const {GET:auditGet}=await import('data:text/javascript;base64,'+Buffer.from(auditCompiled).toString('base64'));
+globalThis.__auditUser=null;assert.equal((await auditGet(new Request('https://app.test/api/audit'))).status,401);
+globalThis.__auditUser=applicant;assert.equal((await auditGet(new Request('https://app.test/api/audit'))).status,403);
+globalThis.__auditUser=admin;
+const auditResults=await (await auditGet(new Request('https://app.test/api/audit?q=Organization'))).json();
+assert.ok(auditResults.total>0);assert.ok(auditResults.events.every(e=>e.action==='Organization updated'));
+assert.equal((await auditGet(new Request('https://app.test/api/audit?from=2026-10-01&to=2026-01-01'))).status,400);
+assert.equal((await (await auditGet(new Request('https://app.test/api/audit?q=%27%20OR%201=1'))).json()).total,0);
+console.log('PASS: immutable atomic audit events, concurrent review deduplication, admin-only reads, search and date validation.');
+
+delete globalThis.__workflowDB;delete globalThis.__auditUser;sql.close();
