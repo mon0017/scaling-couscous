@@ -43,6 +43,13 @@
       "when": 1790246522565,
       "tag": "0005_payroll_imports",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1790365965565,
+      "tag": "0006_audit_trail",
+      "breakpoints": true
     }
   ]
 }
