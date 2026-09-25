@@ -24,14 +24,14 @@ assert.throws(()=>repaymentFields({method:'other',monthlyRate:1}));
 assert.equal(repaymentFields({method:'self_pay',monthlyRate:'2.75'}).rateBps,275);
 
 const sql=new DatabaseSync(':memory:');sql.exec('PRAGMA foreign_keys=ON');
-for(const file of ['0000_dizzy_zaladane','0001_organization_approvals','0002_member_enrollment','0003_repayment_policy','0004_late_waivers','0005_payroll_imports'])sql.exec(readFileSync('drizzle/'+file+'.sql','utf8'));
+for(const file of ['0000_dizzy_zaladane','0001_organization_approvals','0002_member_enrollment','0003_repayment_policy','0004_late_waivers','0005_payroll_imports','0006_audit_trail'])sql.exec(readFileSync('drizzle/'+file+'.sql','utf8'));
 sql.prepare('INSERT INTO members(id,name,email,role) VALUES(?,?,?,?)').run('member','Member','member@example.test','member');
 sql.prepare('INSERT INTO members(id,name,email,role) VALUES(?,?,?,?)').run('admin','Admin','admin@example.test','admin');
 sql.prepare('INSERT INTO loans(id,member_id,type,amount,term,rate,total,paid,status,purpose,created_at,start_date,late_policy) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)').run('loan','member','Personal',300000,3,0,300000,0,'active','Test','2025-12-01','2026-01-01',loan.late_policy);
 class Statement{constructor(text,params=[]){this.text=text;this.params=params}bind(...params){return new Statement(this.text,params)}async first(){return sql.prepare(this.text).get(...this.params)||null}async all(){return{results:sql.prepare(this.text).all(...this.params)}}run(){return{meta:{changes:Number(sql.prepare(this.text).run(...this.params).changes)}}}}
 globalThis.__repaymentDB={prepare:text=>new Statement(text),batch:async statements=>{sql.exec('BEGIN');try{const out=statements.map(s=>s.run());sql.exec('COMMIT');return out}catch(e){sql.exec('ROLLBACK');throw e}}};
 const server=moduleUrl("export const db=()=>globalThis.__repaymentDB;export const json=(d,status=200)=>Response.json(d,{status});export const string=v=>{if(typeof v!=='string'||!v.trim())throw Error('Invalid text');return v.trim()};export const notice=()=>{};");
-const service=moduleUrl(readFileSync('app/repayment-service.ts','utf8').replace("'./server'",JSON.stringify(server)).replace("'./repayment'",JSON.stringify(repayment)));
+const service=moduleUrl(readFileSync('app/repayment-service.ts','utf8').replace("'./audit'",JSON.stringify(pathToFileURL(process.cwd()+'/app/audit.ts').href)).replace("'./server'",JSON.stringify(server)).replace("'./repayment'",JSON.stringify(repayment)));
 const {saveRepayment,recordRepayment,waiveInterest}=await import(service);
 const admin={id:'admin',role:'admin'},member={id:'member',role:'member'};
 assert.equal((await saveRepayment(member,{loanId:'loan'})).status,403);
@@ -60,5 +60,13 @@ await assert.rejects(()=>recordRepayment(admin,{loanId:'loan',amount:10,date:'20
 assert.equal((await waiveInterest(admin,{loanId:'loan',revision:1,amount:(before.interestDue-1000)/100,reason:'Full hardship waiver'})).status,200);
 waived=sql.prepare("SELECT * FROM loans WHERE id='loan'").get();assert.equal(repaymentBalance(waived,[]).interestDue,0);
 assert.ok(repaymentBalance(waived,[],nextDay(today())).interestDue>0);
-sql.close();delete globalThis.__repaymentDB;
+delete globalThis.__repaymentDB;
 console.log('PASS: daily simple late interest, partial/on-time/late payments, rate changes, 0% disable, component allocation, admin-only settings/payments, migration, version conflicts, payoff and duplicate prevention.');
+
+const auditCount=sql.prepare('SELECT count(*) n FROM audit_events').get().n;
+assert.ok(auditCount>0,'Successful mutations create audit events');
+assert.throws(()=>sql.exec("UPDATE audit_events SET action='changed'"),/cannot be edited/);
+assert.throws(()=>sql.exec('DELETE FROM audit_events'),/cannot be deleted/);
+assert.equal(sql.prepare('SELECT count(*) n FROM audit_events').get().n,auditCount);
+
+sql.close();

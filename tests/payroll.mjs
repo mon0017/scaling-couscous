@@ -24,15 +24,15 @@ assert.equal(january.cash,15000);assert.equal(january.collected,10000);assert.eq
 const february=monthCollections([{...loan,paid:15000}],[{...payment,amount:15000}],'2026-02','2026-03-01');assert.equal(february.cash,0);assert.equal(february.collected,5000);assert.equal(february.pending,5000);
 assert.equal(dailyActivities([], [payment],[],[],'2026-01-03').length,1);
 const sql=new DatabaseSync(':memory:');sql.exec('PRAGMA foreign_keys=ON');
-for(const file of ['0000_dizzy_zaladane','0001_organization_approvals','0002_member_enrollment','0003_repayment_policy','0004_late_waivers','0005_payroll_imports'])sql.exec(readFileSync('drizzle/'+file+'.sql','utf8'));
+for(const file of ['0000_dizzy_zaladane','0001_organization_approvals','0002_member_enrollment','0003_repayment_policy','0004_late_waivers','0005_payroll_imports','0006_audit_trail'])sql.exec(readFileSync('drizzle/'+file+'.sql','utf8'));
 sql.prepare('INSERT INTO members(id,name,email,role) VALUES(?,?,?,?)').run('admin','Admin','admin@example.test','admin');
 for(const m of members)sql.prepare('INSERT INTO members(id,name,email,role) VALUES(?,?,?,?)').run(m.id,m.name,m.email,'member');
 for(const [id,member] of [['A','a'],['B','b']])sql.prepare('INSERT INTO loans(id,member_id,type,amount,term,rate,total,status,purpose,created_at,start_date) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(id,member,'Personal',30000,3,0,30000,'active','Test','2025-12-01','2026-01-01');
 class Statement{constructor(text,params=[]){this.text=text;this.params=params}bind(...p){return new Statement(this.text,p)}async first(){return sql.prepare(this.text).get(...this.params)||null}async all(){return{results:sql.prepare(this.text).all(...this.params)}}run(){return{meta:{changes:Number(sql.prepare(this.text).run(...this.params).changes)}}}}
 let conflict=false;
-globalThis.__payrollDB={prepare:s=>new Statement(s),batch:async statements=>{assert.equal(statements.length,4);if(conflict){sql.exec("UPDATE loans SET repayment_revision=repayment_revision+1 WHERE id='B'");conflict=false}sql.exec('BEGIN');try{const out=statements.map(s=>s.run());sql.exec('COMMIT');return out}catch(e){sql.exec('ROLLBACK');throw e}}};
+globalThis.__payrollDB={prepare:s=>new Statement(s),batch:async statements=>{assert.equal(statements.length,5);if(conflict){sql.exec("UPDATE loans SET repayment_revision=repayment_revision+1 WHERE id='B'");conflict=false}sql.exec('BEGIN');try{const out=statements.map(s=>s.run());sql.exec('COMMIT');return out}catch(e){sql.exec('ROLLBACK');throw e}}};
 const server=compile("export const db=()=>globalThis.__payrollDB;export const json=(d,s=200)=>Response.json(d,{status:s});export const string=(v,min,max)=>{if(typeof v!=='string'||v.trim().length<min||v.trim().length>max)throw Error('Invalid text');return v.trim()};");
-const {importDeductions}=await import(compile(readFileSync('app/payroll-service.ts','utf8').replace("'./server'",JSON.stringify(server)).replace("'./payroll'",JSON.stringify(payroll))));
+const {importDeductions}=await import(compile(readFileSync('app/payroll-service.ts','utf8').replace("'./audit'",JSON.stringify(pathToFileURL(process.cwd()+'/app/audit.ts').href)).replace("'./server'",JSON.stringify(server)).replace("'./payroll'",JSON.stringify(payroll))));
 const admin={id:'admin',role:'admin'},body={filename:'payroll.xlsx',rows:[rows[0],{...rows[0],loanId:'B',email:'b@example.test',amount:'300',reference:'PAY-B'}],mode:'preview'};
 assert.equal((await importDeductions({role:'member'},body)).status,403);
 assert.equal((await importDeductions(admin,body)).status,200);assert.equal(sql.prepare('SELECT count(*) n FROM payments').get().n,0);
@@ -46,5 +46,14 @@ const oldError=console.error;console.error=()=>{};conflict=true;assert.equal((aw
 assert.equal(sql.prepare('SELECT count(*) n FROM payments').get().n,0);assert.equal(sql.prepare('SELECT count(*) n FROM payroll_imports').get().n,0);assert.equal(sql.prepare("SELECT paid FROM loans WHERE id='A'").get().paid,0);
 const hundred=[];for(let i=0;i<100;i++){const id='BULK-'+i;sql.prepare('INSERT INTO loans(id,member_id,type,amount,term,rate,total,status,purpose,created_at,start_date) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(id,'a','Personal',30000,3,0,30000,'active','Bulk test','2025-12-01','2026-01-01');hundred.push({...rows[0],loanId:id,reference:'BULK-REF-'+i,amount:'300'})}
 const bulk=await importDeductions(admin,{filename:'100-rows.xlsx',rows:hundred,mode:'commit',confirmed:true,revisions:Object.fromEntries(hundred.map(r=>[r.loanId,0]))});assert.equal(bulk.status,200);assert.equal((await bulk.json()).imported,100);assert.equal(sql.prepare("SELECT count(*) n FROM loans WHERE id LIKE 'BULK-%' AND status='completed'").get().n,100);
-sql.close();delete globalThis.__payrollDB;
+delete globalThis.__payrollDB;
 console.log('PASS: payroll validation, ownership, duplicate protection, preview without writes, atomic multi-loan import, full/partial payoff, concurrent rollback, cash versus schedule allocation and Manila activity dates.');
+
+const auditCount=sql.prepare('SELECT count(*) n FROM audit_events').get().n;
+assert.ok(auditCount>0,'Successful mutations create audit events');
+assert.throws(()=>sql.exec("UPDATE audit_events SET action='changed'"),/cannot be edited/);
+assert.throws(()=>sql.exec('DELETE FROM audit_events'),/cannot be deleted/);
+assert.equal(sql.prepare('SELECT count(*) n FROM audit_events').get().n,auditCount);
+
+assert.equal(sql.prepare("SELECT count(*) n FROM audit_events WHERE action='Payroll imported'").get().n,2,'Only the two successful imports create events; retries and rollback create none');
+sql.close();

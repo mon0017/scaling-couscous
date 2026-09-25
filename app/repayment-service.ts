@@ -1,3 +1,4 @@
+import {auditStatement} from './audit';
 import {db,json,string,notice} from './server';
 import {repaymentFields,repaymentBalance,policies,nextDay,today,validDate,waivers} from './repayment';
 import type {Loan,Payment} from './shared';
@@ -17,6 +18,8 @@ export async function waiveInterest(u:any,b:any){
  const result=await d.batch([
   d.prepare("UPDATE loans SET late_waivers=?,repayment_revision=repayment_revision+1,status=? WHERE id=? AND repayment_revision=? AND status='active'").bind(JSON.stringify([...waivers(l),record]),balance.baseDue===0&&amount===balance.interestDue?'completed':'active',l.id,l.repayment_revision),
   d.prepare('INSERT INTO notifications (id,member_id,title,body,kind,read,created_at) SELECT ?,?,?,?,?,0,? WHERE changes()=1').bind(crypto.randomUUID(),l.member_id,'Late interest waived',`${l.id}: PHP ${(amount/100).toFixed(2)} waived. Reason: ${reason}. Future late-interest rates are unchanged.`,'loan',new Date().toISOString())
+,
+  auditStatement(d,u,'Late interest waived',l.id,{interestDue:balance.interestDue},{...record,interestDue:balance.interestDue-amount},true)
  ]);
  if(!result[0].meta.changes)return json({error:'Loan changed. Refresh before retrying.'},409);
  return json({message:'Late-interest waiver recorded. Future rate unchanged.'});
@@ -35,6 +38,8 @@ export async function saveRepayment(u:any,b:any){
  const result=await d.batch([
   d.prepare('UPDATE loans SET repayment_method=?,late_policy=?,repayment_revision=repayment_revision+1 WHERE id=? AND repayment_revision=? AND status=?').bind(method,JSON.stringify(next),l.id,l.repayment_revision,l.status),
   d.prepare('INSERT INTO notifications (id,member_id,title,body,kind,read,created_at) SELECT ?,?,?,?,?,0,? WHERE changes()=1').bind(crypto.randomUUID(),l.member_id,'Repayment settings updated',`${l.id}: ${method==='self_pay'?'Member-paid':'Automatic deduction'}; monthly late interest ${rateBps/100}%, ${l.status==='pending'?'starting only after an installment is overdue':'effective '+effective}. Simple daily accrual on overdue installments, using a 30-day month.`,'loan',new Date().toISOString())
+,
+  auditStatement(d,u,'Repayment settings updated',l.id,{method:l.repayment_method,policy:policies(l)},{method,policy:next,effective},true)
  ]);
  if(!result[0].meta.changes)return json({error:'Loan changed. Refresh before saving.'},409);
  return json({message:'Repayment settings saved. '+(l.status==='active'?'The rate takes effect tomorrow.':'The rate applies after an installment becomes overdue.')});
@@ -61,6 +66,8 @@ export async function recordRepayment(u:any,b:any){
   d.prepare("UPDATE loans SET paid=paid+?,status=?,repayment_revision=repayment_revision+1 WHERE id=? AND status='active' AND repayment_revision=? AND NOT EXISTS (SELECT 1 FROM payments WHERE reference=?)").bind(baseAmount,amount===balance.totalDue?'completed':'active',id,l.repayment_revision,reference),
   d.prepare('INSERT INTO payments (id,loan_id,amount,paid_at,reference,recorded_by,interest_amount,recorded_at) SELECT ?,?,?,?,?,?,?,? WHERE changes()=1').bind(paymentId,id,amount,date,reference,u.id,interestAmount,new Date().toISOString()),
   d.prepare('INSERT INTO notifications (id,member_id,title,body,kind,read,created_at) SELECT ?,?,?,?,?,0,? WHERE changes()=1').bind(crypto.randomUUID(),l.member_id,'Payment received',`${paymentId}: PHP ${(amount/100).toFixed(2)} recorded, including PHP ${(interestAmount/100).toFixed(2)} late interest.`,'payment',new Date().toISOString())
+,
+  auditStatement(d,u,'Payment recorded',id,{paid:l.paid,status:l.status},{paymentId,amount,interestAmount,date,reference,paid:l.paid+baseAmount,status:amount===balance.totalDue?'completed':'active'},true)
  ]);
  if(!result[0].meta.changes)return json({error:'Balance or settings changed. Refresh before retrying.'},409);
  return json({message:'Payment recorded and receipt created.'});
