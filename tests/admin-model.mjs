@@ -13,3 +13,16 @@ assert.equal(filterBorrowers(groups,'member99@','all','name')[0].id,'99');assert
 assert.equal(filterBorrowers(groups,'','overdue','balance').length,100);assert.equal(filterBorrowers(groups,'','none','name').length,0);
 assert.equal(borrowerGroups([],loans).length,100);
 console.log('PASS: 100 distinct borrower accounts, same-name isolation, loan grouping, balances, overdue, email/loan search and filters.');
+
+const {approvalQueue}=await import(compile(readFileSync('app/approval-queue.ts','utf8')));
+const sample={...loans[0],status:'pending',created_at:'2026-01-01T00:00:00Z'};
+const steps=[{loan_id:sample.id,position:1,role_id:'staff',status:'approved',decided_at:'2026-01-10T00:00:00Z'},{loan_id:sample.id,position:2,role_id:'president',role_name:'President',status:'pending'}];
+const assignments=[{member_id:sample.member_id,role_id:'president'}];
+let queue=approvalQueue([sample],steps,assignments,members,Date.parse('2026-01-18T00:00:00Z'));
+assert.equal(queue[0].days,8);assert.equal(queue[0].current.position,2);assert.equal(queue[0].needsReviewer,true,'Applicant cannot review own application');
+assignments.push({member_id:'1',role_id:'president'});queue=approvalQueue([sample],steps,assignments,members,Date.parse('2026-01-18T00:00:00Z'));
+assert.equal(queue[0].reviewers.length,1);assert.equal(queue[0].reviewers[0].id,'1');assert.equal(queue[0].needsReviewer,false);
+assert.equal(approvalQueue([{...sample,status:'active'}],steps,assignments,members).length,0);
+assert.equal(approvalQueue([sample],[],assignments,members)[0].needsReviewer,true);
+assert.equal(approvalQueue([{...sample,created_at:'invalid'}],[],[],members)[0].days,null);
+console.log('PASS: approval-step waiting time, eligibility, self-approval exclusion, missing routes and pending-only queue.');
