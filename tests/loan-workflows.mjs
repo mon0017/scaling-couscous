@@ -62,6 +62,15 @@ assert.equal((await saveMember(admin,{...person,email:' person@example.com '})).
 const enrollment=sql.prepare('SELECT * FROM members WHERE email=?').get('person@example.com');assert.equal(enrollment.auth_id,null);assert.equal(enrollment.role,'member');
 assert.equal((await saveMember(admin,{...person,memberId:enrollment.id,email:'updated@example.com'})).status,200);
 org=await readOrganization();org.assignments.push({member_id:enrollment.id,role_id:'staff'});assert.equal((await saveOrganization(admin,{organization:org})).status,200);
+// One organization role per member: reject additive assignments atomically, allow replacement.
+const beforeRoles=await readOrganization();
+const multipleRoles=structuredClone(beforeRoles);multipleRoles.assignments.push({member_id:enrollment.id,role_id:'manager'});
+assert.throws(()=>validateOrganization(multipleRoles,sql.prepare('SELECT id FROM members').all().map(m=>m.id)),/Only one role/);
+await assert.rejects(saveOrganization(admin,{organization:multipleRoles}),/Only one role/);
+assert.deepEqual(await readOrganization(),beforeRoles);
+const replacement=structuredClone(beforeRoles);replacement.assignments=replacement.assignments.map(a=>a.member_id===enrollment.id?{...a,role_id:'manager'}:a);
+assert.equal((await saveOrganization(admin,{organization:replacement})).status,200);
+assert.deepEqual(sql.prepare('SELECT role_id FROM member_roles WHERE member_id=?').all(enrollment.id).map(r=>r.role_id),['manager']);
 assert.equal(await resolveEnrolledMember(d,{userId:'unknown',email:'not-enrolled@example.com'},false),null);
 assert.equal(await resolveEnrolledMember(d,{userId:'old-email',email:'person@example.com'},false),null);
 const claimed=await resolveEnrolledMember(d,{userId:'verified-subject',email:'UPDATED@example.com',fullName:'Provider name'},false);assert.equal(claimed.id,enrollment.id);assert.equal(claimed.name,'New Person');assert.equal(claimed.auth_id,'verified-subject');
